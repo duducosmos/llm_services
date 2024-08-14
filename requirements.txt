@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+debugpy
+langchain-community
+langchain
+langchainhub
+gpt4all
+chromadb
+requests
+beautifulsoup4
+python-dotenv
+boto3
+pandas
+findspark
+koalas
+delta-spark

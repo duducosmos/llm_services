@@ -1,0 +1,168 @@
+services:
+  app:
+    build: .
+    ports:
+      - "7777:8000"
+      - "5679:5678"
+    volumes:
+      - .:/code
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: always
+    depends_on:
+      - ollama
+    networks:
+      - ollama-docker-pg
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  ollama:
+    volumes:
+      - ./ollama/ollama:/root/.ollama
+    container_name: ollamaprojectgate
+    image: ollama/ollama:latest
+    ports:
+      - "11435:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    networks:
+      - ollama-docker-pg
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  ollama-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ollama-webui
+    volumes:
+      - ./ollama/ollama-webui:/app/backend/data
+    depends_on:
+      - ollama
+    ports:
+      - 8080:8080
+    environment:
+      # https://docs.openwebui.com/getting-started/env-configuration#default_models
+      - OLLAMA_BASE_URLS=http://host.docker.internal:11435 #comma separated ollama hosts
+      - ENV=dev
+      - WEBUI_AUTH=False
+      - WEBUI_NAME=valiantlynx AI
+      - WEBUI_URL=http://localhost:8080
+      - WEBUI_SECRET_KEY=t0p-s3cr3t
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    networks:
+      - ollama-docker-pg
+
+  pyspark:
+    build: DockerSpark
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+    ports:
+      - "8888:8888"
+    networks:
+      - ollama-docker-pg
+    volumes:
+      - ./work:/home/jovyan/work
+      - ./data:/home/jovyan/data
+    env_file:
+      - .env
+    depends_on:
+      - ollama
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  pgvector:
+    hostname: pgvector_db
+    container_name: pgvector_db_container
+    image: ankane/pgvector
+    ports:
+      - 5433:5432
+    restart: unless-stopped
+    networks:
+      - ollama-docker-pg
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - ./local_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  postgres:
+    image: postgres:12-alpine
+    hostname: flowise-db
+    environment:
+      POSTGRES_USERNAME: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432/tcp"
+    networks:
+      - ollama-docker-pg
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    deploy:
+      restart_policy:
+        condition: on-failure
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8085:8080/tcp"
+    networks:
+      - ollama-docker-pg
+    deploy:
+      restart_policy:
+        condition: on-failure
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  flowise:
+    image: flowiseai/flowise
+    restart: always
+    environment:
+      DEBUG: false
+      PORT: ${PORT}
+      FLOWISE_USERNAME: ${FLOWISE_USERNAME}
+      FLOWISE_PASSWORD: ${FLOWISE_PASSWORD}
+      APIKEY_PATH: /root/.flowise
+      SECRETKEY_PATH: /root/.flowise
+      LOG_LEVEL: info
+      LOG_PATH: /root/.flowise/logs
+      DATABASE_TYPE: postgres
+      DATABASE_PORT: 5432
+      DATABASE_HOST: flowise-db
+      DATABASE_NAME: ${POSTGRES_DB}
+      DATABASE_USER: ${POSTGRES_USER}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - '${PORT}:${PORT}'
+    volumes:
+      - .flowise:/root/.flowise
+    entrypoint: /bin/sh -c "sleep 3; flowise start"
+    networks:
+      - ollama-docker-pg
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      - ollama
+      - postgres
+
+networks:
+  ollama-docker-pg:
+    external: false
